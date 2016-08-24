@@ -10,9 +10,10 @@ if (@ARGV != 1) {
 
 my $benchmark = shift @ARGV;
 my $iterations = 5;
+my $orders_of_magnitude = 6;
 
 my @a = ();
-for my $i (0..8) {
+for my $i (0 .. $orders_of_magnitude) {
   push @a, (1 * 10 ** $i, 2 * 10 ** $i, 5 * 10 ** $i);
 }
 
