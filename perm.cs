@@ -376,8 +376,8 @@ class Test {
             }
             try {
                 MPermNKLBenchmark (m, n, k, l);
-            } catch (InvalidOperationException invalidOperation) {
-                Console.Error.WriteLine (invalidOperation);
+            } catch (InvalidOperationException invalid_operation) {
+                Console.Error.WriteLine (invalid_operation);
                 return 1;
             }
             return 0;
