@@ -354,7 +354,11 @@ class Test {
             return 1;
         }
 
-        if (arguments [0] == "MpermNKL" && arguments.Length == 5) {
+        if (string.Equals (
+                arguments [0],
+                "MpermNKL",
+                StringComparison.OrdinalIgnoreCase)
+            && arguments.Length == 5) {
             int m, n, k, l;
             if (!(Int32.TryParse (arguments [1], out m)
                   && Int32.TryParse (arguments [2], out n)
