@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Text;
 
 /*
@@ -33,15 +34,6 @@ The live storage peaks at twice the storage that is allocated by the
 perm9 benchmark.  At the end of each iteration, the oldest half of
 the live storage becomes garbage.  Object lifetimes are distributed
 uniformly between 10.3 and 20.6 megabytes.
-
-The 10perm9 benchmark is the 10perm9:2:1 special case of the
-MpermNKL benchmark, which allocates a queue of size K and then
-performs M iterations of the following operation:  Fill the queue
-with individually computed copies of all permutations of a list of
-size N, and then remove the oldest L copies from the queue.  At the
-end of each iteration, the oldest L/K of the live storage becomes
-garbage, and object lifetimes are distributed uniformly between two
-volumes that depend upon N, K, and L.
 
 The sumperms benchmark computes the sum of the permuted integers
 over all permutations.
@@ -89,12 +81,15 @@ procedure P_n
 */
 
 class List {
+
     public object Head { get; set; }
     public List Tail { get; set; }
+
     public List (object head, List tail) {
         this.Head = head;
         this.Tail = tail;
     }
+
     public int Length
     {
         get
@@ -104,6 +99,7 @@ class List {
             return 1 + Tail.Length;
         }
     }
+
     /*
       (define (list-tail x n)
               (if (zero? n)
@@ -114,6 +110,7 @@ class List {
     {
         return n == 0 || x == null ? x : Drop (x.Tail, n - 1);
     }
+
     /*
       (define (revloop x n y)
               (if (zero? n)
@@ -126,6 +123,7 @@ class List {
     {
         return n == 0 || x == null ? acc : List.Reverse (x.Tail, n - 1, new List (x.Head, acc));
     }
+
     public override string ToString ()
     {
         var result = new StringBuilder ();
@@ -138,6 +136,7 @@ class List {
         result.Append ("]");
         return result.ToString ();
     }
+
     public int Sums ()
     {
         /*
@@ -307,11 +306,87 @@ class List {
         }
     }
 
+    public static List OneTo (int n)
+    {
+        /*
+            (define (one..n n)
+              (do ((n n (- n 1))
+                   (p '() (cons n p)))
+                  ((zero? n) p)))
+        */
+        List result = null;
+        for (int i = n + 1; i > 1; --i)
+            result = new List ((object)(i - 1), result);
+        return result;
+    }
+
+    public bool Equals (List that)
+    {
+        if (that == null)
+            return false;
+        var a = this;
+        var b = that;
+        while (a != null && b != null) {
+            if (!a.Head.Equals (b.Head))
+                return false;
+            a = a.Tail;
+            b = b.Tail;
+        }
+        return (a == null) && (b == null);
+    }
+
 }
 
 class Test {
-    public static void Main (string [] arguments)
+
+    public static int Main (string [] arguments)
     {
+
+#if DEBUG
+        TextWriterTraceListener myWriter = new ConsoleTraceListener ();
+        Debug.Listeners.Add (myWriter);
+#endif
+
+        Debug.WriteLine (List.OneTo (5));
+
+        if (arguments.Length < 1) {
+            PrintUsage ();
+            return 1;
+        }
+
+        if (arguments [0] == "MpermNKL" && arguments.Length == 5) {
+            int m, n, k, l;
+            if (!(Int32.TryParse (arguments [1], out m)
+                  && Int32.TryParse (arguments [2], out n)
+                  && Int32.TryParse (arguments [3], out k)
+                  && Int32.TryParse (arguments [4], out l)
+                  && m >= 0
+                  && n > 0
+                  && k > 0
+                  && (0 <= l && l <= k))) {
+                Console.Error.WriteLine (
+                    "Invalid arguments to {0} benchmark.",
+                    arguments [0]);
+                PrintUsage ();
+                return 1;
+            }
+            try {
+                MPermNKLBenchmark (m, n, k, l);
+            } catch (InvalidOperationException invalidOperation) {
+                Console.Error.WriteLine (invalidOperation);
+                return 1;
+            }
+            return 0;
+        }
+
+        Console.Error.WriteLine (
+            "Unknown benchmark {0} or wrong number of arguments {1}.",
+            arguments [0],
+            arguments.Length);
+        PrintUsage ();
+        return 1;
+
+#if false
         var list = new List
             ((object)1, new List
             ((object)2, new List
@@ -323,7 +398,95 @@ class Test {
 */
         List.Sort (list, (a, b) => (int)a < (int)b);
         Console.WriteLine (list);
+#endif
+
     }
+
+    // Fills queue positions [i, j).
+    private static void FillQueue (List[] queue, int n, int i, int j)
+    {
+        /*
+            (define (fill-queue i j)
+              (if (< i j)
+                  (begin (vector-set! queue i (permutations (one..n n)))
+                         (fill-queue (+ i 1) j))))
+        */
+        while (i < j) {
+            queue [i] = Permutations (List.OneTo (n));
+            ++i;
+        }
+    }
+
+    // Removes L elements from queue.
+    private static void FlushQueue (List[] queue, int k, int l)
+    {
+
+        /*
+            (define (flush-queue)
+              (let loop ((i 0))
+                (if (< i k)
+                    (begin (vector-set! queue
+                                        i
+                                        (let ((j (+ i ell)))
+                                          (if (< j k)
+                                              (vector-ref queue j)
+                                              '())))
+                           (loop (+ i 1))))))
+        */
+
+        int i = 0;
+        while (i < k) {
+            int j = i + l;
+            queue [i] = j < k ? queue [j] : null;
+            ++i;
+        }
+
+    }
+
+    private static void RunBenchmark<T>
+        (string id, Func<T> benchmark, int count, Func<T, bool> correct)
+    {
+        var stopwatch = new Stopwatch ();
+        Debug.WriteLine ("Running benchmark {0}.", id);
+        stopwatch.Start ();
+        for (int i = 0; i < count; ++i) {
+            Debug.WriteLine ("Benchmark {0} iteration {1}.", id, i);
+            var result = benchmark ();
+            if (!correct (result))
+                throw new InvalidOperationException
+                    (String.Format ("Benchmark {0} failed (returned {1}).", id, result));
+        }
+        stopwatch.Stop ();
+        Console.WriteLine (
+            "Benchmark {0} succeeded ({1} iters, {2}ms / iter).",
+            id,
+            count,
+            (double)stopwatch.ElapsedMilliseconds / count);
+    }
+
+    private static void MPermNKLBenchmark (int m, int n, int k, int l)
+    {
+        var id = String.Format ("{0}perm{1}:{2}:{3}", m, n, k, l);
+        var queue = new List [k];
+        FillQueue (queue, n, 0, k - l);
+        RunBenchmark (
+            id,
+            () => {
+                Debug.WriteLine ("Filling queue...");
+                FillQueue (queue, n, k - l, k);
+                Debug.WriteLine ("Flushing queue...");
+                FlushQueue (queue, k, l);
+                Debug.WriteLine ("Done.");
+                return queue;
+            },
+            m,
+            (q) => {
+                var q0 = q [0];
+                var qi = q [Math.Max (0, k - l - 1)];
+                return q0 == null && qi == null || q0 != null && qi != null && q0.Head == qi.Head;
+            });
+    }
+
     public static List Permutations (List x)
     {
         /*
@@ -335,6 +498,32 @@ class Test {
         permuter.Permute (x.Length);
         return permuter.Permutations;
     }
+
+    private static void PrintUsage ()
+    {
+        Console.Error.WriteLine (
+@"Usage:
+
+	mono perm.exe <benchmark> <options>
+
+Benchmarks:
+
+	mono perm.exe MpermNKL <M:int> <N:int> <K:int> <L:int>
+
+		M ≥ 0, N > 0, K > 0, 0 ≤ L ≤ K
+
+		The 10perm9 benchmark is the 10perm9:2:1 special case of the
+		MpermNKL benchmark, which allocates a queue of size K and then
+		performs M iterations of the following operation:  Fill the queue
+		with individually computed copies of all permutations of a list of
+		size N, and then remove the oldest L copies from the queue.  At the
+		end of each iteration, the oldest L/K of the live storage becomes
+		garbage, and object lifetimes are distributed uniformly between two
+		volumes that depend upon N, K, and L.
+
+");
+    }
+
 }
 
 class Permuter
@@ -418,11 +607,6 @@ class Permuter
 
 (define *perms* '())
 
-(define (one..n n)
-  (do ((n n (- n 1))
-       (p '() (cons n p)))
-      ((zero? n) p)))
-   
 (define (perm-benchmark . rest)
   (let ((n (if (null? rest) 9 (car rest))))
     (set! *perms* '())
@@ -437,57 +621,6 @@ class Permuter
   (let ((n (if (null? rest) 9 (car rest))))
     (set! *perms* '())
     (MpermNKL-benchmark 10 n 2 1)))
-
-(define (MpermNKL-benchmark m n k ell)
-  (if (and (<= 0 m)
-           (positive? n)
-           (positive? k)
-           (<= 0 ell k))
-      (let ((id (string-append (number->string m)
-                               "perm"
-                               (number->string n)
-                               ":"
-                               (number->string k)
-                               ":"
-                               (number->string ell)))
-            (queue (make-vector k '())))
-
-        ; Fills queue positions [i, j).
-
-        (define (fill-queue i j)
-          (if (< i j)
-              (begin (vector-set! queue i (permutations (one..n n)))
-                     (fill-queue (+ i 1) j))))
-
-        ; Removes ell elements from queue.
-
-        (define (flush-queue)
-          (let loop ((i 0))
-            (if (< i k)
-                (begin (vector-set! queue
-                                    i
-                                    (let ((j (+ i ell)))
-                                      (if (< j k)
-                                          (vector-ref queue j)
-                                          '())))
-                       (loop (+ i 1))))))
-
-        (fill-queue 0 (- k ell))
-        (run-benchmark id
-                       m
-                       (lambda ()
-                         (fill-queue (- k ell) k)
-                         (flush-queue)
-                         queue)
-                       (lambda (q)
-                         (let ((q0 (vector-ref q 0))
-                               (qi (vector-ref q (max 0 (- k ell 1)))))
-                           (or (and (null? q0) (null? qi))
-                               (and (pair? q0)
-                                    (pair? qi)
-                                    (equal? (car q0) (car qi))))))))
-      (begin (display "Incorrect arguments to MpermNKL-benchmark")
-             (newline))))
 
 (define (sumperms-benchmark . rest)
   (let ((n (if (null? rest) 9 (car rest))))
