@@ -19,28 +19,6 @@ the memory system.
     sumperms        traversal of a large, linked, self-sharing structure
     mergesort!      side effects and write barrier
 
-The perm9 benchmark generates a list of all 362880 permutations of
-the first 9 integers, allocating 1349288 pairs (typically 10,794,304
-bytes), all of which goes into the generated list.  (That is, the
-perm9 benchmark generates absolutely no garbage.)  This represents
-a savings of about 63% over the storage that would be required by
-an unshared list of permutations.  The generated permutations are
-in order of a grey code that bears no obvious relationship to a
-lexicographic order.
-
-The 10perm9 benchmark repeats the perm9 benchmark 10 times, so it
-allocates and reclaims 13492880 pairs (typically 107,943,040 bytes).
-The live storage peaks at twice the storage that is allocated by the
-perm9 benchmark.  At the end of each iteration, the oldest half of
-the live storage becomes garbage.  Object lifetimes are distributed
-uniformly between 10.3 and 20.6 megabytes.
-
-The sumperms benchmark computes the sum of the permuted integers
-over all permutations.
-
-The mergesort! benchmark destructively sorts the generated permutations
-into lexicographic order, allocating no storage whatsoever.
-
 The benchmarks are run by calling the following procedures:
 
    (perm-benchmark n)
@@ -94,9 +72,10 @@ class List {
     {
         get
         {
-            if (Tail == null)
-                return 1;
-            return 1 + Tail.Length;
+            int result = 0;
+            for (var a = this; a != null; a = a.Tail)
+                ++result;
+            return result;
         }
     }
 
@@ -335,9 +314,47 @@ class List {
         return (a == null) && (b == null);
     }
 
+    public static bool LexicographicallyLess (List x, List y, Func<object, object, bool> less)
+    {
+
+        /*
+            (define lexicographically-less?
+              (lambda (x y)
+                (define (lexicographically-less? x y)
+                  (cond ((null? x) (not (null? y)))
+                        ((null? y) #f)
+                        ((< (car x) (car y)) #t)
+                        ((= (car x) (car y))
+                         (lexicographically-less? (cdr x) (cdr y)))
+                        (else #f)))
+                (lexicographically-less? x y)))
+        */
+
+        while (true) {
+            if (x == null)
+                return y != null;
+            if (y == null)
+                return false;
+            if (less (x.Head, y.Head))
+                return true;
+            if (less (x.Head, y.Head) || less (y.Head, x.Head))
+                return false;
+            x = x.Tail;
+            y = y.Tail;
+        }
+
+    }
+
+    public static bool NumericallyLess (Object a, Object b)
+    {
+        return (int)a < (int)b;
+    }
+
 }
 
 class Test {
+
+    static List perms = null;
 
     public static int Main (string [] arguments)
     {
@@ -354,7 +371,60 @@ class Test {
             return 1;
         }
 
-        if (string.Equals (
+        if (String.Equals (
+                arguments [0],
+                "Perm",
+                StringComparison.OrdinalIgnoreCase)
+            && arguments.Length >= 1 && arguments.Length <= 2) {
+            int n = 9;
+            if (arguments.Length == 2
+                && !(Int32.TryParse (arguments [1], out n))) {
+                Console.Error.WriteLine (
+                    "Invalid arguments to Perm benchmark.",
+                    arguments [0]);
+                PrintUsage ();
+                return 1;
+            }
+            try {
+                RunBenchmark (
+                    String.Format ("Perm{0}", n),
+                    () => {
+                        perms = Permutations (List.OneTo (n));
+                        return perms;
+                    },
+                    1,
+                    (x) => true);
+            } catch (InvalidOperationException invalid_operation) {
+                Console.Error.WriteLine (invalid_operation.Message);
+                return 1;
+            }
+            return 0;
+        }
+
+        if (String.Equals (
+                arguments [0],
+                "10Perm",
+                StringComparison.OrdinalIgnoreCase)
+            && arguments.Length >= 1 && arguments.Length <= 2) {
+            int n = 9;
+            if (arguments.Length == 2
+                && !(Int32.TryParse (arguments [1], out n))) {
+                Console.Error.WriteLine (
+                    "Invalid arguments to 10Perm benchmark.",
+                    arguments [0]);
+                PrintUsage ();
+                return 1;
+            }
+            try {
+                MPermNKLBenchmark (10, n, 2, 1);
+            } catch (InvalidOperationException invalid_operation) {
+                Console.Error.WriteLine (invalid_operation.Message);
+                return 1;
+            }
+            return 0;
+        }
+
+        if (String.Equals (
                 arguments [0],
                 "MpermNKL",
                 StringComparison.OrdinalIgnoreCase)
@@ -377,10 +447,104 @@ class Test {
             try {
                 MPermNKLBenchmark (m, n, k, l);
             } catch (InvalidOperationException invalid_operation) {
-                Console.Error.WriteLine (invalid_operation);
+                Console.Error.WriteLine (invalid_operation.Message);
                 return 1;
             }
             return 0;
+        }
+
+        if (String.Equals (
+                arguments [0],
+                "MergeSort",
+                StringComparison.OrdinalIgnoreCase)
+            && arguments.Length >= 1 && arguments.Length <= 2) {
+
+            int n = 9;
+            if (arguments.Length == 2
+                && !(Int32.TryParse (arguments [1], out n))) {
+                Console.Error.WriteLine (
+                    "Invalid arguments to 10Perm benchmark.",
+                    arguments [0]);
+                PrintUsage ();
+                return 1;
+            }
+
+            if (perms == null || n != ((List)perms.Head).Length)
+                perms = Permutations (List.OneTo (n));
+
+            try {
+                RunBenchmark (
+                    String.Format ("MergeSort!{0}", n),
+                    () => {
+                        List.Sort (
+                            perms,
+                            (a, b) => List.LexicographicallyLess (
+                                (List)a, (List)b, List.NumericallyLess));
+                        return perms;
+                    },
+                    1,
+                    (x) => true);
+            } catch (InvalidOperationException invalid_operation) {
+                Console.Error.WriteLine (invalid_operation.Message);
+                return 1;
+            }
+
+            return 0;
+
+        }
+        
+/*
+(define (sumperms-benchmark . rest)
+  (let ((n (if (null? rest) 9 (car rest))))
+    (if (or (null? *perms*)
+            (not (= n (length (car *perms*)))))
+        (set! *perms* (permutations (one..n n))))
+    (run-benchmark (string-append "Sumperms" (number->string n))
+                   1
+                   (lambda ()
+                     (sumlists *perms*))
+                   (lambda (x) #t))))
+*/
+
+        if (String.Equals (
+                arguments [0],
+                "SumPerms",
+                StringComparison.OrdinalIgnoreCase)
+            && arguments.Length >= 1 && arguments.Length <= 2) {
+
+            int n = 9;
+            if (arguments.Length == 2
+                && !(Int32.TryParse (arguments [1], out n))) {
+                Console.Error.WriteLine (
+                    "Invalid arguments to SumPerms benchmark.",
+                    arguments [0]);
+                PrintUsage ();
+                return 1;
+            }
+
+            if (perms == null || n != ((List)perms.Head).Length)
+                perms = Permutations (List.OneTo (n));
+
+            try {
+                RunBenchmark (
+                    String.Format ("MergeSort!{0}", n),
+                    () => {
+                        return perms.Sums ();
+                    },
+                    1,
+                    (sum) => {
+                        var n_factorial = 1;
+                        for (int i = 1; i <= n; ++i)
+                            n_factorial *= i;
+                        return sum == n_factorial * n * (n + 1) / 2;
+                    });
+            } catch (InvalidOperationException invalid_operation) {
+                Console.Error.WriteLine (invalid_operation.Message);
+                return 1;
+            }
+
+            return 0;
+
         }
 
         Console.Error.WriteLine (
@@ -400,7 +564,7 @@ class Test {
         var x = Permutations (list);
         Console.WriteLine (x);
 */
-        List.Sort (list, (a, b) => (int)a < (int)b);
+        List.Sort (list, List.NumericallyLess);
         Console.WriteLine (list);
 #endif
 
@@ -512,18 +676,51 @@ class Test {
 
 Benchmarks:
 
+	mono perm.exe Perm <N:int>?
+		default N = 9
+
+		The perm9 benchmark generates a list of all 362880 permutations of
+		the first 9 integers, allocating 1349288 pairs (typically 10,794,304
+		bytes), all of which goes into the generated list.  (That is, the
+		perm9 benchmark generates absolutely no garbage.)  This represents
+		a savings of about 63% over the storage that would be required by
+		an unshared list of permutations.  The generated permutations are
+		in order of a grey code that bears no obvious relationship to a
+		lexicographic order.
+
+	mono perm.exe 10Perm <N:int>?
+		default N = 9
+
+		The 10perm9 benchmark repeats the perm9 benchmark 10 times, so it
+		allocates and reclaims 13492880 pairs (typically 107,943,040 bytes).
+		The live storage peaks at twice the storage that is allocated by the
+		perm9 benchmark.  At the end of each iteration, the oldest half of
+		the live storage becomes garbage.  Object lifetimes are distributed
+		uniformly between 10.3 and 20.6 megabytes. The 10perm9 benchmark is
+		the 10perm9:2:1 special case of the MpermNKL benchmark.
+
 	mono perm.exe MpermNKL <M:int> <N:int> <K:int> <L:int>
+		where M ≥ 0, N > 0, K > 0, 0 ≤ L ≤ K
 
-		M ≥ 0, N > 0, K > 0, 0 ≤ L ≤ K
+		Allocates a queue of size K and then performs M iterations of the
+		following operation: Fill the queue with individually computed
+		copies of all permutations of a list of size N, and then remove the
+		oldest L copies from the queue.  At the end of each iteration, the
+		oldest L/K of the live storage becomes garbage, and object lifetimes
+		are distributed uniformly between two volumes that depend upon N, K,
+		and L.
 
-		The 10perm9 benchmark is the 10perm9:2:1 special case of the
-		MpermNKL benchmark, which allocates a queue of size K and then
-		performs M iterations of the following operation:  Fill the queue
-		with individually computed copies of all permutations of a list of
-		size N, and then remove the oldest L copies from the queue.  At the
-		end of each iteration, the oldest L/K of the live storage becomes
-		garbage, and object lifetimes are distributed uniformly between two
-		volumes that depend upon N, K, and L.
+	mono perm.exe SumPerms <N:int>?
+		default N = 9
+
+		The sumperms benchmark computes the sum of the permuted integers
+		over all permutations.
+
+	mono perm.exe MergeSort <N:int>?
+		default N = 9
+
+		The mergesort! benchmark destructively sorts the generated permutations
+		into lexicographic order, allocating no storage whatsoever.
 
 ");
     }
@@ -578,17 +775,6 @@ class Permuter
 
 /*
 
-(define lexicographically-less?
-  (lambda (x y)
-    (define (lexicographically-less? x y)
-      (cond ((null? x) (not (null? y)))
-            ((null? y) #f)
-            ((< (car x) (car y)) #t)
-            ((= (car x) (car y))
-             (lexicographically-less? (cdr x) (cdr y)))
-            (else #f)))
-    (lexicographically-less? x y)))
-
 ; This procedure isn't used by the benchmarks,
 ; but is provided as a public service.
 
@@ -611,41 +797,4 @@ class Permuter
 
 (define *perms* '())
 
-(define (perm-benchmark . rest)
-  (let ((n (if (null? rest) 9 (car rest))))
-    (set! *perms* '())
-    (run-benchmark (string-append "Perm" (number->string n))
-                   1
-                   (lambda ()
-                     (set! *perms* (permutations (one..n n)))
-                     #t)
-                   (lambda (x) #t))))
-
-(define (tenperm-benchmark . rest)
-  (let ((n (if (null? rest) 9 (car rest))))
-    (set! *perms* '())
-    (MpermNKL-benchmark 10 n 2 1)))
-
-(define (sumperms-benchmark . rest)
-  (let ((n (if (null? rest) 9 (car rest))))
-    (if (or (null? *perms*)
-            (not (= n (length (car *perms*)))))
-        (set! *perms* (permutations (one..n n))))
-    (run-benchmark (string-append "Sumperms" (number->string n))
-                   1
-                   (lambda ()
-                     (sumlists *perms*))
-                   (lambda (x) #t))))
-
-(define (mergesort-benchmark . rest)
-  (let ((n (if (null? rest) 9 (car rest))))
-    (if (or (null? *perms*)
-            (not (= n (length (car *perms*)))))
-        (set! *perms* (permutations (one..n n))))
-    (run-benchmark (string-append "Mergesort!" (number->string n))
-                   1
-                   (lambda ()
-                     (sort!! *perms* lexicographically-less?)
-                     #t)
-                   (lambda (x) #t))))
 */
